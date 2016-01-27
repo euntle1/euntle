@@ -53,7 +53,7 @@ func (dt *DotTree) LoadMetaDotBlock(dotMapBlock map[uint64]*MetaDot, lower int, 
 
     for dt.dotProvider.HasMore() {
 		metaDot := new(MetaDot)
-		err = dt.dotProvider.Populate(&metaDot.Id, &metaDot.ParentId, &metaDot.Name, &metaDot.Value)
+		err = dt.dotProvider.Produce(&metaDot.Id, &metaDot.ParentId, &metaDot.Name, &metaDot.Value)
 
 		if err != nil {
 			glog.Error("Couldn't populate dot.")

@@ -4,7 +4,7 @@ type DotProvider interface {
 	Init()                                // Initialize the provider.
 	Begin(lower int, upper int) bool      // Begin providing dots. 
 	HasMore() bool                        // Are more dots available?
-	Populate(params ...interface{}) error // Pointer to meta dot.
+	Produce(params ...interface{}) error  // Produces and populates dot data fields.
 	Finalize() bool                       // Cleanup and shut down.
 }
 
@@ -15,7 +15,6 @@ type DotProviderFactory struct {
 func (dpf DotProviderFactory) GetInstance() DotProvider {
 	return nil
 }
-
 
 var dpf DotProviderFactory
 
