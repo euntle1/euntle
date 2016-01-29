@@ -18,7 +18,7 @@ func (dpf DotProviderFactory) GetInstance() DotProvider {
 
 var dpf DotProviderFactory
 
-func GetInstance() DotProvider {
+func GetProviderInstance() DotProvider {
 	return dpf.GetInstance()
 }
 

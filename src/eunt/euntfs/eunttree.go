@@ -8,15 +8,8 @@ import (
 	dp "dp/dpds"
 )
 
-type Dot struct {
-	Id       uint64 `json:"-"`   // ID of dot
-	ParentId uint64 `json:"-"`   // ID of Parent
-	Name     string              // Dot's name
-	Value    string              // Dot's value
-}
-
 type MetaDot struct {
-	Dot
+	dp.Dot
 	ParentName     string   // Parent's name
 	Depth          uint64   // Depth of dot from root.
 	Children       uint64   // Number of children.
@@ -30,7 +23,7 @@ type DotTree struct {
 
 func GetInstance() *DotTree {
 	dt := &DotTree { }
-	dt.dotProvider = dp.GetInstance()
+	dt.dotProvider = dp.GetProviderInstance()
 	
 	dt.dotProvider.Init()
 	
