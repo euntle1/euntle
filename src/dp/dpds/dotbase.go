@@ -9,3 +9,10 @@ type Dot struct {
 	Name     string              // Dot's name
 	Value    string              // Dot's value
 }
+
+type MetaDot struct {
+	Dot
+	ParentName     string   // Parent's name
+	Depth          uint64   // Depth of dot from root.
+	Children       uint64   // Number of children.
+}
