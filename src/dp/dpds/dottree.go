@@ -6,14 +6,16 @@ import (
 	"strings"
 	"github.com/golang/glog"
 	"encoding/json"
+	"regexp"
 	"sync"
 )
 
 type DotTree struct {
-	dotProvider DotProvider         // Dot Provider Interface
-	dotMap      map[uint64]*MetaDot    // Map of meta dots
-	nameIdMap   map[string]uint64      // Map of name->ids
-	waiter      *sync.WaitGroup
+	dotMap             map[uint64]*MetaDot // Map of meta dots
+	nameIdMap          map[string]uint64   // Map of name->ids
+	waiter            *sync.WaitGroup
+	routeMap           map[string]*MetaDot // Map of routes to attached dot.
+	regexMap           map[string]*regexp.Regexp
 }
 
 type DotTreeFactory struct {
@@ -22,10 +24,12 @@ type DotTreeFactory struct {
 
 func (dtf *DotTreeFactory) GetInstance() *DotTree  {
 	if dtf.dt == nil {
-		dt := &DotTree {nil,  make(map[uint64]*MetaDot),  make(map[string]uint64), new(sync.WaitGroup) }
-		dt.dotProvider = GetProviderInstance()
-	
-		dt.dotProvider.Init()
+		dt := &DotTree { make(map[uint64]*MetaDot), 
+			             make(map[string]uint64), 
+			             new(sync.WaitGroup), 
+			             make(map[string]*MetaDot),
+			             make(map[string]*regexp.Regexp) }
+
 		dt.loadMetaDots()
 		dt.fillMetaDots()
 	
@@ -36,26 +40,36 @@ func (dtf *DotTreeFactory) GetInstance() *DotTree  {
 
 var DtFactory *DotTreeFactory = new(DotTreeFactory)
 
+func (dt *DotTree) GetDot(route string) *MetaDot {
+	return dt.routeMap[route]
+}
+
 // Loads a block of dots.
 func (dt *DotTree) loadMetaDotBlock(dotMapBlock map[uint64]*MetaDot, lower int, upper int) bool {
-	if  dt.dotProvider == nil {
+	dotProvider := GetProviderInstance("enju")
+	
+	if  dotProvider == nil {
 		glog.Errorf("Source pool not available.")
 		return false
 	}
 	
-	result := dt.dotProvider.Begin(lower, upper)
+	queryFields := []string{"Id", "ParentId", "Name", "Value"}
+	whereFields := []string{"id >= ?", "and", "id < ?"}
+	dotProvider.InitFields("dots", queryFields, whereFields, lower, upper)
+	result := dotProvider.Begin()
 	if !result {
 		glog.Errorf("Couldn't get any dots.")
 		return false
 	}
     var err error
 
-    for dt.dotProvider.HasMore() {
+    for dotProvider.HasMore() {
 		metaDot := new(MetaDot)
-		err = dt.dotProvider.Produce(&metaDot.Id, &metaDot.ParentId, &metaDot.Name, &metaDot.Value)
+		metaDot.RequestDotChannel = make(chan *RequestDot, 100)
+		err = dotProvider.Produce(&metaDot.Id, &metaDot.ParentId, &metaDot.Name, &metaDot.Value)
 
 		if err != nil {
-			glog.Error("Couldn't populate dot.")
+			glog.Error("Couldn't populate dot: " + err.Error())
 			return false
 		}
 
@@ -63,20 +77,17 @@ func (dt *DotTree) loadMetaDotBlock(dotMapBlock map[uint64]*MetaDot, lower int, 
 		dotMapBlock[metaDot.Id] = metaDot
 	}
     
-    if dt.dotProvider.Finalize() == false {
+    if dotProvider.Finalize() == false {
 		glog.Error("Failure to clean up.")
 		return false
     }
+    
+    ReturnProviderInstance(dotProvider)
 
 	return true
 }
 
 func (dt *DotTree) loadMetaDots() bool {
-	if  dt.dotProvider == nil {
-		glog.Errorf("Dot provider not available.")
-		return false
-	}
-
 	dt.dotMap = make(map[uint64]*MetaDot)
 	
     dotMapChannel := make(chan map[uint64]*MetaDot, 20)
@@ -86,16 +97,17 @@ func (dt *DotTree) loadMetaDots() bool {
 	done := false
 	loadHadErrors := false
 	blockcount := 0
+	currentBlockCount := 1
+	previousBlockCount := 0
 
 	for !done {
-		if blockcount > 0 && blockcount % 10 == 0 {
+		if blockcount > 0 && blockcount % currentBlockCount == 0 {
 			dt.waiter.Wait()
-			var dotMapResult map[uint64]*MetaDot
 			for {
 				if done {
 					break
 				}
-			    dotMapResult = <- dotMapChannel
+			    dotMapResult := <- dotMapChannel
 			    blockcount--
 			    if dotMapResult == nil {
 					glog.Error("Empty result")
@@ -103,14 +115,20 @@ func (dt *DotTree) loadMetaDots() bool {
 			    }
 
 			    for k, v := range dotMapResult {
-			    	glog.Error(k)
-			    	glog.Error(v)
 	               dt.dotMap[k] = v
 	               dt.nameIdMap[v.Name] = k
 	            }
 			    if loadHadErrors {
 				    return false
 			    }
+			    if len(dotMapResult) < (upper - lower) {
+			    	return true
+			    }
+			    if blockcount == 0 {
+			        currentBlockCount = currentBlockCount + previousBlockCount
+			        previousBlockCount = currentBlockCount
+			    }
+			    break
 	        }
 		}
 		dt.waiter.Add(1)
@@ -192,29 +210,31 @@ func (dt *DotTree) fillMetaDots() bool {
 	return true
 }
 
-func (dt *DotTree) GenerateRoutes() map[string]string {
-	routeMap  := make(map[string]string)      // Map of name->value
-    
+func (dt *DotTree) GenerateRoutes() map[string]*MetaDot {
 	for _, dot := range dt.dotMap {
-		if dot.Id == 0 {
+		dotLocal := dot
+		if dotLocal.Id == 0 {
 			// Skip root dot.
 			continue
 		}
 		route := []string{}
-		value := dot.Value
+		dpc := &DotProcessorChannel{}
 		for {
-			route = append([]string{dot.Name}, route...)
+			route = append([]string{dotLocal.Name}, route...)
 			
-			if dot.ParentId == 0 {
-				completeRoute := "/" + strings.Join(route[:],"/")
-				routeMap[completeRoute] = value
+			if dotLocal.ParentId == 0 {
+				sourceDotRoute := "/" + strings.Join(route[:],"/")
+
+				glog.Error("Entering new route: " + sourceDotRoute)
+				dpc.Process(dt, dot, sourceDotRoute)
+				dt.routeMap[sourceDotRoute] = dot
 				break
 			} else {
-				dot = dt.dotMap[dot.ParentId]
+				dotLocal = dt.dotMap[dotLocal.ParentId]
 			}
 		}
 	}
-	return routeMap
+	return dt.routeMap
 }
 
 func (dt *DotTree) ToJSON() string {
