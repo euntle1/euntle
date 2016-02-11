@@ -9,15 +9,17 @@ import (
 	"strings"
 )
 
+// The dot processor simply processes a dot and sets up a listener for it.
 type DotProcessor interface {
-    Process(dt *DotTree, sourceDot *MetaDot, sourceDotRoute string)
+	InitListener(dt *DotTree, sourceDot *MetaDot, sourceDotRoute string)
 }
 
+// The dot processor channel is set up for each dot to listen for incoming DotRequests.
 type DotProcessorChannel struct {
-	
 }
 
-func serializeError(dotError *DotError) string {
+// Takes a DotError and converts it to a serialized json error.
+func serializeDotError(dotError *DotError) string {
 	dotErrorJsonBytes, err := json.Marshal(dotError)
 	dotErrorJson := string(dotErrorJsonBytes)
 	if err != nil {
@@ -28,14 +30,18 @@ func serializeError(dotError *DotError) string {
 	return dotErrorJson
 }
 
-func processSerializedError(dotError *DotError, dotId uint64, errorDescription string) string {
+// Called when there is an error in dot processing due to a RequestDot failing requirements
+// specified by a dot.
+func dotProcessingError(dotError *DotError, dotId uint64, errorDescription string) string {
 	glog.Error(errorDescription)
 	dotError.Id = dotId
 	dotError.errors = append(dotError.errors, errors.New(errorDescription))
-	return serializeError(dotError)
+	return serializeDotError(dotError)
 }
 
-func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, qsetMap map[string]interface{}) {
+// Parses configuration and Queries the datasource for this dot.  Queries can be any valid
+// query type (create, find, delete) for access to the data source.
+func queryDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, qsetMap map[string]interface{}) {
 	qArray := qsetMap["q"].([](interface{}))
 	var dataSource string
 	var tableName string
@@ -51,7 +57,7 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 		if qMap["type"] == "required" {
 			if !qValOk || len(qvalue[0]) == 0 {
 				// Missing required parameter.
-				dotErrorJson := processSerializedError(dotError, sourceDot.Id, "Missing required parameter: "+qname)
+				dotErrorJson := dotProcessingError(dotError, sourceDot.Id, "Missing required parameter: "+qname)
 				rd.WriteResult(dotErrorJson)
 			}
 		}
@@ -76,12 +82,12 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 				}
 				match := compiledRegex.MatchString(qvalue[0])
 				if !match {
-					processSerializedError(dotError, sourceDot.Id, "Incorrect parameter format: "+qname)
+					dotProcessingError(dotError, sourceDot.Id, "Incorrect parameter format: "+qname)
 				}
 			}
 			if qvalue == nil || len(qvalue) == 0 {
 				// Missing required parameter.
-				processSerializedError(dotError, sourceDot.Id, "Missing required parameter: "+qname)
+				dotProcessingError(dotError, sourceDot.Id, "Missing required parameter: "+qname)
 			}
 		}
 
@@ -92,11 +98,11 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 				if _, hasTable := cDestMap["table"]; hasTable {
 					tableName = cDestMap["table"].(string)
 				} else {
-					processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Missing required table for dot: %d", sourceDot.Name))
+					dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required table for dot: %d", sourceDot.Name))
 					hasErrors = true
 				}
 			} else if tableName != cDestMap["table"] {
-				processSerializedError(dotError, sourceDot.Id, "dot defined with multiple object destinations: "+qname)
+				dotProcessingError(dotError, sourceDot.Id, "dot defined with multiple object destinations: "+qname)
 				continue
 			}
 
@@ -104,11 +110,11 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 				if _, hasSource := cDestMap["ds"]; hasSource {
 					dataSource = cDestMap["ds"].(string)
 				} else {
-					processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Missing required datasource for dot: %d", sourceDot.Name))
+					dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required datasource for dot: %d", sourceDot.Name))
 					hasErrors = true
 				}
 			} else if dataSource != cDestMap["ds"] {
-				processSerializedError(dotError, sourceDot.Id, "dot defined with multiple object destinations: "+qname)
+				dotProcessingError(dotError, sourceDot.Id, "dot defined with multiple object destinations: "+qname)
 				hasErrors = true
 				continue
 			}
@@ -124,7 +130,7 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 
 			success := dotProvider.Create()
 			if !success {
-				processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
+				dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
 			}
 			ReturnProviderInstance(dotProvider)
 		}
@@ -133,7 +139,8 @@ func processQSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 	}
 }
 
-func processDSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, cDestMap map[string]interface{}) {
+// Parses configuration and creates the datasource for this dot.
+func constructDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, cDestMap map[string]interface{}) {
 	dArray := cDestMap["d"].([](interface{}))
 	var dataSource string
 	var tableName string
@@ -141,7 +148,7 @@ func processDSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 	if _, hasTable := cDestMap["table"]; hasTable {
 		tableName = cDestMap["table"].(string)
 	} else {
-		processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Missing required table for dot: %d", sourceDot.Name))
+		dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required table for dot: %d", sourceDot.Name))
 		return
 	}
 
@@ -149,7 +156,7 @@ func processDSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 		dataSource = cDestMap["ds"].(string)
 	} else {
 		// datasource required.
-		processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Missing required datasource for dot: %d", sourceDot.Name))
+		dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required datasource for dot: %d", sourceDot.Name))
 		return
 	}
 
@@ -165,7 +172,7 @@ func processDSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 		if len(dName) == 0 || len(dType) == 0 {
 			// Missing required parameter.
 			hasErrors = true
-			processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s %s %s", tableName, dName, dType))
+			dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s %s %s", tableName, dName, dType))
 			break
 		}
 		params[i] = fmt.Sprintf("%s %s", dName, dType)
@@ -178,14 +185,20 @@ func processDSet(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotE
 		dotProvider.InitFields(tableName, params, nil, 0, 0)
 		success := dotProvider.Construct()
 		if !success {
-			processSerializedError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
+			dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
 		}
 		ReturnProviderInstance(dotProvider)
 	}
 
 }
 
-func (dpc *DotProcessorChannel) Process(dt *DotTree, sourceDot *MetaDot, sourceDotRoute string) {
+// Parses configuration and destroys the datasource for this dot.
+func destroyDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, cDestMap map[string]interface{}) {
+	// TODO: implement this.
+}
+
+// Set up a listener for the provided source dot.  This dot listener listens forever and process incoming request dots.
+func (dpc *DotProcessorChannel) InitListener(dt *DotTree, sourceDot *MetaDot, sourceDotRoute string) {
 
 	go func(sourceDot *MetaDot, dotRoute string) {
 		dotError := new(DotError)
@@ -197,7 +210,7 @@ func (dpc *DotProcessorChannel) Process(dt *DotTree, sourceDot *MetaDot, sourceD
 				currentSubRoute := rd.currentSubRoute
 				if strings.HasSuffix(currentSubRoute, "dot.json") {
 					// dot.json is only ever internally referanceable.
-					dotErrorJson := processSerializedError(dotError, sourceDot.Id, "Subroute should should never directly reference dot.json.")
+					dotErrorJson := dotProcessingError(dotError, sourceDot.Id, "Subroute should should never directly reference dot.json.")
 					rd.WriteResult(dotErrorJson)
 					continue
 				} else {
@@ -205,7 +218,7 @@ func (dpc *DotProcessorChannel) Process(dt *DotTree, sourceDot *MetaDot, sourceD
 				}
 				if rd.currentSubRoute != dotRoute {
 					// This should never happen.
-					dotErrorJson := processSerializedError(dotError, sourceDot.Id, "Subroute should always match the current dot route.")
+					dotErrorJson := dotProcessingError(dotError, sourceDot.Id, "Subroute should always match the current dot route.")
 					rd.WriteResult(dotErrorJson)
 					continue
 				} else {
@@ -214,21 +227,31 @@ func (dpc *DotProcessorChannel) Process(dt *DotTree, sourceDot *MetaDot, sourceD
 					var dotConfig map[string]interface{}
 
 					if err := json.Unmarshal([]byte(dotMolder.Value), &dotConfig); err != nil {
-						dotErrorJson := processSerializedError(dotError, sourceDot.Id, "Invalid dot config: "+currentSubRoute)
+						dotErrorJson := dotProcessingError(dotError, sourceDot.Id, "Invalid dot config: "+currentSubRoute)
 						rd.WriteResult(dotErrorJson)
 						continue
 					}
 
 					dotMap := dotConfig["dot"].(map[string]interface{})
-					_, hasQset := dotMap["qset"]
-					if hasQset {
-						qsetMap := dotMap["qset"].(map[string]interface{})
-						processQSet(dt, rd, sourceDot, dotError, qsetMap)
+					_, hasQuery := dotMap["query"]
+					if hasQuery {
+						qsetMap := dotMap["query"].(map[string]interface{})
+						queryDotDS(dt, rd, sourceDot, dotError, qsetMap)
 					} else {
-						// Look for construction set.
-						dsetMap := dotMap["dset"].(map[string]interface{})
-						glog.Error(dsetMap)
-						processDSet(dt, rd, sourceDot, dotError, dsetMap)
+						_, hasConstruct := dotMap["construct"]
+
+						if hasConstruct {
+							// Look for construction set.
+							dsetMap := dotMap["construct"].(map[string]interface{})
+							constructDotDS(dt, rd, sourceDot, dotError, dsetMap)
+						} else {
+							_, hasDestroy := dotMap["destroy"]
+							if hasDestroy {
+								// Look for construction set.
+								dsetMap := dotMap["destroy"].(map[string]interface{})
+								destroyDotDS(dt, rd, sourceDot, dotError, dsetMap)
+							}
+						}
 					}
 
 					if rd.currentSubRoute == rd.routeComplete {
@@ -239,7 +262,7 @@ func (dpc *DotProcessorChannel) Process(dt *DotTree, sourceDot *MetaDot, sourceD
 					}
 
 					if len(dotError.errors) > 0 {
-						dotErrorJson := serializeError(dotError)
+						dotErrorJson := serializeDotError(dotError)
 						rd.WriteResult(dotErrorJson)
 						continue
 					}
