@@ -126,7 +126,7 @@ func queryDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotEr
 		// Initialize fields and create.
 		if !hasErrors {
 			dotProvider := GetProviderInstance(dataSource)
-			dotProvider.InitFields(tableName, queryFields, queryValues, 0, 0)
+			dotProvider.InitFields(tableName, queryFields, queryValues, nil, nil, 0, 0)
 
 			success := dotProvider.Create()
 			if !success {
@@ -182,7 +182,7 @@ func constructDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *D
 	if !hasErrors {
 		dotProvider := GetProviderInstance(dataSource)
 
-		dotProvider.InitFields(tableName, params, nil, 0, 0)
+		dotProvider.InitFields(tableName, params, nil, nil, nil, 0, 0)
 		success := dotProvider.Construct()
 		if !success {
 			dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
@@ -194,7 +194,33 @@ func constructDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *D
 
 // Parses configuration and destroys the datasource for this dot.
 func destroyDotDS(dt *DotTree, rd *RequestDot, sourceDot *MetaDot, dotError *DotError, cDestMap map[string]interface{}) {
-	// TODO: implement this.
+	var dataSource string
+	var tableName string
+
+	if _, hasTable := cDestMap["table"]; hasTable {
+		tableName = cDestMap["table"].(string)
+	} else {
+		dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required table for dot: %d", sourceDot.Name))
+		return
+	}
+
+	if _, hasSource := cDestMap["ds"]; hasSource {
+		dataSource = cDestMap["ds"].(string)
+	} else {
+		// datasource required.
+		dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Missing required datasource for dot: %d", sourceDot.Name))
+		return
+	}
+
+	// Initialize fields and destroy.
+	dotProvider := GetProviderInstance(dataSource)
+
+	dotProvider.InitFields(tableName, nil, nil, nil, nil, 0, 0)
+	success := dotProvider.Destroy()
+	if !success {
+		dotProcessingError(dotError, sourceDot.Id, fmt.Sprintf("Failure to create table: %s", tableName))
+	}
+	ReturnProviderInstance(dotProvider)
 }
 
 // Set up a listener for the provided source dot.  This dot listener listens forever and process incoming request dots.

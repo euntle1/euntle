@@ -56,7 +56,7 @@ func (dt *DotTree) loadMetaDotBlock(dotMapBlock map[uint64]*MetaDot, lower int, 
 
 	queryFields := []string{"Id", "ParentId", "Name", "Value"}
 	whereFields := []string{"id >= ?", "and", "id < ?"}
-	dotProvider.InitFields("dots", queryFields, whereFields, lower, upper)
+	dotProvider.InitFields("dots", queryFields, whereFields, nil, nil, lower, upper)
 	result := dotProvider.Begin()
 	if !result {
 		glog.Errorf("Couldn't get any dots.")
